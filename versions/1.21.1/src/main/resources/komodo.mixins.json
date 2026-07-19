@@ -4,6 +4,7 @@
   "package": "com.norwood.komodo.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "TraceToolLookingCacheMixin",
     "VehicleGunDataCacheMixin"
   ],
   "client": [
