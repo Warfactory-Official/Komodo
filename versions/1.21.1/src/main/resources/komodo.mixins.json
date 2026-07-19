@@ -1,0 +1,19 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.norwood.komodo.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "VehicleGunDataCacheMixin"
+  ],
+  "client": [
+    "EntityRenderDispatcherAccessor",
+    "GeoEntityRendererAccessor",
+    "LightTextureAccessor",
+    "KmodoCubeRedirectMixin",
+    "KmodoFlushMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

@@ -1,0 +1,48 @@
+modLoader = "javafml"
+loaderVersion = "[1,)"
+license = "GPL-3.0"
+
+[[mods]]
+modId = "komodo"
+version = "${version}"
+displayName = "Komodo SBW renderer"
+description = "GPU-instanced Flywheel rendering for Superb Warfare vehicles. Client-side."
+displayTest = "IGNORE_ALL_VERSIONS"
+
+[[dependencies.komodo]]
+modId = "forge"
+mandatory = true
+versionRange = "[47,)"
+ordering = "NONE"
+side = "CLIENT"
+
+[[dependencies.komodo]]
+modId = "minecraft"
+mandatory = true
+versionRange = "[1.20.1,)"
+ordering = "NONE"
+side = "CLIENT"
+
+[[dependencies.komodo]]
+modId = "superbwarfare"
+mandatory = true
+versionRange = "*"
+ordering = "AFTER"
+side = "CLIENT"
+
+[[dependencies.komodo]]
+modId = "geckolib"
+mandatory = true
+versionRange = "*"
+ordering = "AFTER"
+side = "CLIENT"
+
+[[dependencies.komodo]]
+modId = "flywheel"
+mandatory = true
+versionRange = "*"
+ordering = "AFTER"
+side = "CLIENT"
+
+[[mixins]]
+config = "komodo.mixins.json"
