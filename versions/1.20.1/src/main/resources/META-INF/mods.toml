@@ -7,7 +7,7 @@ modId = "komodo"
 version = "${version}"
 displayName = "Komodo SBW renderer"
 description = "GPU-instanced Flywheel rendering for Superb Warfare vehicles. Client-side."
-displayTest = "IGNORE_ALL_VERSIONS"
+displayTest = "IGNORE_ALL_VERSION"
 
 [[dependencies.komodo]]
 modId = "forge"
