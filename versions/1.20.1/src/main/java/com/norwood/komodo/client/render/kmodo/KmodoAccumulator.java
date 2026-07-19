@@ -10,6 +10,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
 
+import com.atsuishio.superbwarfare.client.renderer.entity.VehicleRenderer;
 import com.atsuishio.superbwarfare.entity.vehicle.base.VehicleEntity;
 import com.norwood.komodo.Komodo;
 import org.joml.Matrix4f;
@@ -30,6 +31,12 @@ public final class KmodoAccumulator {
 
     public static boolean tryRecord(GeoRenderer<?> renderer, Entity animatable, PoseStack pose, GeoBone bone) {
         if (!(animatable instanceof VehicleEntity vehicle)) {
+            return false;
+        }
+        // Only VehicleRenderer.render brackets the accumulator (clear at HEAD, flush at TAIL via
+        // KmodoFlushMixin). Other GeoEntityRenderers (e.g. DroneRenderer) never flush, so recording
+        // their cubes here would swallow them and render the entity blank. Let those draw normally.
+        if (!(renderer instanceof VehicleRenderer)) {
             return false;
         }
         if (!KmodoConfig.retainEnabled() || !KmodoConfig.rawDrawAllowed()) {
