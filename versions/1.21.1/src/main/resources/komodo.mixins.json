@@ -12,7 +12,9 @@
     "GeoEntityRendererAccessor",
     "LightTextureAccessor",
     "KmodoCubeRedirectMixin",
-    "KmodoFlushMixin"
+    "KmodoFlushMixin",
+    "KmodoAnimResetMixin",
+    "KmodoAnimQueuePoolMixin"
   ],
   "injectors": {
     "defaultRequire": 1

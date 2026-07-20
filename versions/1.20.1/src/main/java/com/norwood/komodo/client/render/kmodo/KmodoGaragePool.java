@@ -12,6 +12,7 @@ import net.minecraft.resources.ResourceLocation;
 import com.norwood.komodo.Komodo;
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
+import org.joml.Matrix3f;
 import org.joml.Matrix4f;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL15;
@@ -22,6 +23,9 @@ public final class KmodoGaragePool {
 
     static final int VERTEX_STRIDE = 36;
     private static final int INITIAL_CAPACITY = 16;
+
+
+    private static final Matrix3f IDENTITY_NORMAL = new Matrix3f();
     private static final float FRAG_THRESHOLD = 0.4f;
     private static final int MAX_COMPACT_MOVES = 2;
 
@@ -322,6 +326,9 @@ public final class KmodoGaragePool {
         }
         if (shader.PROJECTION_MATRIX != null) {
             shader.PROJECTION_MATRIX.set(projection);
+        }
+        if (shader.INVERSE_VIEW_ROTATION_MATRIX != null) {
+            shader.INVERSE_VIEW_ROTATION_MATRIX.set(IDENTITY_NORMAL);
         }
         if (shader.INVERSE_VIEW_ROTATION_MATRIX != null) {
             shader.INVERSE_VIEW_ROTATION_MATRIX.set(RenderSystem.getInverseViewRotationMatrix());

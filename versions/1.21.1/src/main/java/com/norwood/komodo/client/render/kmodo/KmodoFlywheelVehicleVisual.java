@@ -1,23 +1,9 @@
 package com.norwood.komodo.client.render.kmodo;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-
-import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.math.Axis;
-
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.entity.EntityRenderer;
-import net.minecraft.client.renderer.texture.OverlayTexture;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.util.Mth;
-
 import com.atsuishio.superbwarfare.client.renderer.entity.VehicleRenderer;
 import com.atsuishio.superbwarfare.entity.vehicle.base.GeoVehicleEntity;
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.math.Axis;
 import com.norwood.komodo.client.render.kmodo.KmodoFlywheelModelCache.VehicleModels;
 import com.norwood.komodo.mixin.GeoEntityRendererAccessor;
 import dev.engine_room.flywheel.api.backend.BackendManager;
@@ -30,15 +16,22 @@ import dev.engine_room.flywheel.lib.instance.InstanceTypes;
 import dev.engine_room.flywheel.lib.instance.TransformedInstance;
 import dev.engine_room.flywheel.lib.visual.AbstractEntityVisual;
 import dev.engine_room.flywheel.lib.visual.SimpleDynamicVisual;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.entity.EntityRenderer;
+import net.minecraft.client.renderer.texture.OverlayTexture;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.Mth;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
+import software.bernie.geckolib.animation.AnimationState;
 import software.bernie.geckolib.cache.object.BakedGeoModel;
 import software.bernie.geckolib.cache.object.GeoBone;
-import software.bernie.geckolib.animatable.GeoAnimatable;
-import software.bernie.geckolib.animation.AnimationState;
 import software.bernie.geckolib.model.GeoModel;
 import software.bernie.geckolib.renderer.GeoRenderer;
 import software.bernie.geckolib.util.RenderUtil;
+
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings({"unchecked", "rawtypes"})
 public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleEntity> implements SimpleDynamicVisual {
@@ -49,46 +42,41 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
     private static final Matrix4f COLLAPSE = new Matrix4f().scaling(0.0f);
 
     private static final Map<Integer, KmodoFlywheelVehicleVisual> BY_ENTITY = new ConcurrentHashMap<>();
-
+    private static final int LOD_DEBOUNCE_FRAMES = 15;
+    private static final int RELIGHT_INTERVAL = 20;
+    private static final double GARAGE_MOVE_EPS_SQ = 1.0e-4;
+    private static final double GARAGE_POS_EPS = 1.0e-3;
+    private static final float GARAGE_ROT_EPS = 0.05f;
+    private static final float APPLY_POS_EPS = 1.0e-4f;
     private final GeoRenderer renderer;
     private final Map<String, TransformedInstance> dynamicInstances = new HashMap<>();
+    private final KmodoDormancy dormancy = new KmodoDormancy();
     private TransformedInstance bodyInstance;
     private boolean instancesCreated;
-
     private ResourceLocation createdModelRes;
-
     private ResourceLocation pendingModelRes;
     private int pendingResFrames;
-    private static final int LOD_DEBOUNCE_FRAMES = 15;
-
-    private final KmodoDormancy dormancy = new KmodoDormancy();
     private long poseHash;
-
+    private Set<GeoBone> liveBones;
+    private ResourceLocation liveRes;
     private volatile Map<String, Matrix4f> boneLocal;
     private volatile boolean dormantFlag;
+    private volatile boolean hideBodyFlag;
     private volatile long poseStamp;
     private volatile float scaleW = 1.0f;
     private volatile float scaleH = 1.0f;
-
     private long appliedStamp = Long.MIN_VALUE;
     private float appliedX;
     private float appliedY;
     private float appliedZ;
     private boolean hasApplied;
-
+    private boolean appliedHideBody;
     private volatile boolean pooled;
     private ResourceLocation pooledRes;
     private int pooledSlotVerts;
     private int pooledLight = Integer.MIN_VALUE;
     private int pooledOriginGen;
     private int lastRelightTick = Integer.MIN_VALUE;
-
-    private static final int RELIGHT_INTERVAL = 20;
-    private static final double GARAGE_MOVE_EPS_SQ = 1.0e-4;
-    private static final double GARAGE_POS_EPS = 1.0e-3;
-    private static final float GARAGE_ROT_EPS = 0.05f;
-
-    private static final float APPLY_POS_EPS = 1.0e-4f;
 
     public KmodoFlywheelVehicleVisual(VisualizationContext ctx, GeoVehicleEntity entity, float partialTick) {
         super(ctx, entity, partialTick);
@@ -99,6 +87,17 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
 
     static KmodoFlywheelVehicleVisual byEntity(int entityId) {
         return BY_ENTITY.get(entityId);
+    }
+
+    private static boolean markLive(GeoBone bone, Set<String> dynBones, Set<GeoBone> live) {
+        boolean anyLive = bone.getName() != null && dynBones.contains(bone.getName());
+        for (GeoBone child : bone.getChildBones()) {
+            anyLive |= markLive(child, dynBones, live);
+        }
+        if (anyLive) {
+            live.add(bone);
+        }
+        return anyLive;
     }
 
     public void renderThreadUpdate(float partialTick) {
@@ -163,18 +162,36 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         }
 
         Set<String> dynBones = models.dynamicBones.keySet();
+        if (liveBones == null || !res.equals(liveRes)) {
+            Set<GeoBone> built = Collections.newSetFromMap(new IdentityHashMap<>());
+            for (Object top : baked.topLevelBones()) {
+                markLive((GeoBone) top, dynBones, built);
+            }
+            liveBones = built;
+            liveRes = res;
+        }
+        Set<GeoBone> live = liveBones;
+
         Map<String, Matrix4f> local = new HashMap<>();
         poseHash = FNV_OFFSET;
         long walkStart = prof ? System.nanoTime() : 0L;
         PoseStack pose = new PoseStack();
+        boolean hideBody = false;
         for (Object top : baked.topLevelBones()) {
-            walkLocal(pose, (GeoBone) top, dynBones, local);
+            GeoBone topBone = (GeoBone) top;
+            if (topBone.isHidden()) {
+                hideBody = true;
+            }
+            if (live.contains(topBone)) {
+                walkLocal(pose, topBone, dynBones, local, false, live);
+            }
         }
         if (prof) {
             KmodoProfiler.addPhase(KmodoProfiler.Phase.WALK, System.nanoTime() - walkStart);
         }
 
         boneLocal = local;
+        hideBodyFlag = hideBody;
         poseStamp++;
         dormancy.recordPose(poseHash, entity.tickCount);
         boolean dormant = dormancy.isDormant();
@@ -255,9 +272,6 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         if (entity.isVehicle() || entity.getFirstPassenger() != null) {
             return false;
         }
-        if (entity.getDeltaMovement().lengthSqr() > GARAGE_MOVE_EPS_SQ) {
-            return false;
-        }
         if (Math.abs(entity.getX() - entity.xOld) > GARAGE_POS_EPS
                 || Math.abs(entity.getY() - entity.yOld) > GARAGE_POS_EPS
                 || Math.abs(entity.getZ() - entity.zOld) > GARAGE_POS_EPS) {
@@ -293,16 +307,22 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         return pose;
     }
 
-    private void walkLocal(PoseStack pose, GeoBone bone, Set<String> dynBones, Map<String, Matrix4f> out) {
+    private void walkLocal(PoseStack pose, GeoBone bone, Set<String> dynBones, Map<String, Matrix4f> out,
+                           boolean hidden, Set<GeoBone> live) {
         pose.pushPose();
         RenderUtil.prepMatrixForBone(pose, bone);
-        if (dynBones.contains(bone.getName())) {
+
+        boolean boneHidden = hidden || bone.isHidden();
+        if (!boneHidden && dynBones.contains(bone.getName())) {
             Matrix4f m = new Matrix4f(pose.last().pose());
             out.put(bone.getName(), m);
             foldMatrix(m);
         }
         for (GeoBone child : bone.getChildBones()) {
-            walkLocal(pose, child, dynBones, out);
+
+            if (live.contains(child)) {
+                walkLocal(pose, child, dynBones, out, boneHidden, live);
+            }
         }
         pose.popPose();
     }
@@ -380,7 +400,8 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
 
         Vector3f visualPos = getVisualPosition(partialTick);
         long stamp = poseStamp;
-        if (hasApplied && stamp == appliedStamp
+        boolean hideBody = hideBodyFlag;
+        if (hasApplied && stamp == appliedStamp && hideBody == appliedHideBody
                 && Math.abs(visualPos.x() - appliedX) < APPLY_POS_EPS
                 && Math.abs(visualPos.y() - appliedY) < APPLY_POS_EPS
                 && Math.abs(visualPos.z() - appliedZ) < APPLY_POS_EPS) {
@@ -402,7 +423,7 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         Matrix4f root = pose.last().pose();
 
         if (bodyInstance != null) {
-            bodyInstance.setTransform(root);
+            bodyInstance.setTransform(hideBody ? COLLAPSE : root);
             bodyInstance.setChanged();
             if (prof) {
                 KmodoProfiler.countInstances(1);
@@ -434,6 +455,7 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         appliedX = visualPos.x();
         appliedY = visualPos.y();
         appliedZ = visualPos.z();
+        appliedHideBody = hideBody;
         hasApplied = true;
 
         if (KmodoDebug.enabled()) {
@@ -506,7 +528,7 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
     private ResourceLocation modelRes() {
         try {
             GeoModel model = renderer.getGeoModel();
-            return model.getModelResource((GeoAnimatable) entity);
+            return model.getModelResource(entity);
         } catch (Throwable t) {
             return null;
         }
@@ -514,7 +536,7 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
 
     private BakedGeoModel bakedModel(ResourceLocation res) {
         try {
-            return (BakedGeoModel) renderer.getGeoModel().getBakedModel(res);
+            return renderer.getGeoModel().getBakedModel(res);
         } catch (Throwable t) {
             return null;
         }

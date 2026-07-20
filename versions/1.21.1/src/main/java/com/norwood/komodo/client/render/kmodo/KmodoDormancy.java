@@ -3,7 +3,6 @@ package com.norwood.komodo.client.render.kmodo;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.EntityType;
 
-import com.atsuishio.superbwarfare.entity.vehicle.base.AutoAimableEntity;
 import com.atsuishio.superbwarfare.entity.vehicle.base.GeoVehicleEntity;
 
 import com.norwood.komodo.config.KomodoConfig;
@@ -13,9 +12,7 @@ public final class KmodoDormancy {
     private static final int STABLE_FRAMES = 3;
     private static final int MIN_PROBE_INTERVAL = 20;
     private static final int MAX_PROBE_INTERVAL = 160;
-    private static final String NO_TARGET = "undefined";
 
-    private static final double MOVE_EPS_SQ = 1.0e-4;
     private static final double POS_EPS = 1.0e-3;
     private static final float ROT_EPS = 0.05f;
 
@@ -47,7 +44,6 @@ public final class KmodoDormancy {
             return true;
         }
         if (!probeAllowed(e)) {
-
             return false;
         }
         long now = e.tickCount;
@@ -71,7 +67,6 @@ public final class KmodoDormancy {
             return;
         }
         if (dormancyBlocked) {
-
             stableCount = 0;
             dormant = false;
             probeInterval = MIN_PROBE_INTERVAL;
@@ -79,7 +74,6 @@ public final class KmodoDormancy {
             if (!dormant && ++stableCount >= STABLE_FRAMES) {
                 dormant = true;
             }
-
             if (probePending && probeInterval < MAX_PROBE_INTERVAL) {
                 probeInterval = Math.min(probeInterval * 2, MAX_PROBE_INTERVAL);
             }
@@ -139,9 +133,6 @@ public final class KmodoDormancy {
     }
 
     private boolean wakeSignal(GeoVehicleEntity e) {
-        if (e.getDeltaMovement().lengthSqr() > MOVE_EPS_SQ) {
-            return true;
-        }
         if (Math.abs(e.getX() - e.xOld) > POS_EPS
                 || Math.abs(e.getY() - e.yOld) > POS_EPS
                 || Math.abs(e.getZ() - e.zOld) > POS_EPS) {
@@ -163,12 +154,6 @@ public final class KmodoDormancy {
             return true;
         }
         if (e.getCannonRecoilTime() > 0) {
-            return true;
-        }
-        if (!NO_TARGET.equals(e.getAiTurretTargetUUID()) || !NO_TARGET.equals(e.getAiPassengerWeaponTargetUUID())) {
-            return true;
-        }
-        if (e instanceof AutoAimableEntity a && a.getActive()) {
             return true;
         }
         return e.isOnFire();

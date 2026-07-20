@@ -11,7 +11,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * Superb shoots out like 3 raycasts per frame, hence I want to collapse and cache it
+ * Superb shoots out like 5 raycasts per frame, hence I want to collapse and cache it
  */
 @Mixin(value = TraceTool.class, remap = false)
 public abstract class TraceToolLookingCacheMixin {
