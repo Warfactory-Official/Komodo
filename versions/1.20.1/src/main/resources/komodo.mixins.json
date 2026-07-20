@@ -11,6 +11,7 @@
   "client": [
     "EntityRenderDispatcherAccessor",
     "GeoEntityRendererAccessor",
+    "GeoVehicleNoCullMixin",
     "LightTextureAccessor",
     "KmodoCubeRedirectMixin",
     "KmodoFlushMixin",

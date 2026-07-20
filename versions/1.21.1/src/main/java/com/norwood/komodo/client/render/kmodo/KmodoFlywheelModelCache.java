@@ -55,7 +55,7 @@ public final class KmodoFlywheelModelCache {
 
     private static final int BAKE_LIGHT = 0;
 
-    private static final Map<ResourceLocation, ModelState> STATES = new ConcurrentHashMap<>();
+    private static final Map<String, ModelState> STATES = new ConcurrentHashMap<>();
     private static final Map<ResourceLocation, Object> LOCKS = new ConcurrentHashMap<>();
 
     public static final class VehicleModels {
@@ -111,16 +111,20 @@ public final class KmodoFlywheelModelCache {
         if (res == null) {
             return null;
         }
-        ModelState state = STATES.get(res);
+        ResourceLocation texture = texture(renderer, entity);
+        if (texture == null) {
+            return null;
+        }
+        String key = key(res, texture);
+        ModelState state = STATES.get(key);
         if (state == null) {
             if (!RenderSystem.isOnRenderThread()) {
                 return null;
             }
             state = new ModelState();
-            STATES.put(res, state);
+            STATES.put(key, state);
             BakedGeoModel baked = bakedModel(renderer, res);
-            ResourceLocation texture = texture(renderer, entity);
-            if (baked == null || baked.topLevelBones().isEmpty() || texture == null) {
+            if (baked == null || baked.topLevelBones().isEmpty()) {
                 state.status = ModelState.FAILED;
                 return null;
             }
@@ -136,7 +140,8 @@ public final class KmodoFlywheelModelCache {
                 return false;
             }
             ResourceLocation res = modelRes(renderer, vehicle);
-            ModelState state = res == null ? null : STATES.get(res);
+            ResourceLocation texture = texture(renderer, vehicle);
+            ModelState state = (res == null || texture == null) ? null : STATES.get(key(res, texture));
             return state != null && state.status == ModelState.READY;
         } catch (Throwable t) {
             return false;
@@ -351,6 +356,10 @@ public final class KmodoFlywheelModelCache {
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    private static String key(ResourceLocation res, ResourceLocation texture) {
+        return res.toString() + ' ' + texture.toString();
     }
 
     public static void invalidateAll() {

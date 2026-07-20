@@ -21,8 +21,10 @@ import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.Mth;
+import org.joml.FrustumIntersection;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
+import org.joml.Vector4fc;
 import software.bernie.geckolib.animation.AnimationState;
 import software.bernie.geckolib.cache.object.BakedGeoModel;
 import software.bernie.geckolib.cache.object.GeoBone;
@@ -54,6 +56,7 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
     private TransformedInstance bodyInstance;
     private boolean instancesCreated;
     private ResourceLocation createdModelRes;
+    private ResourceLocation createdTexture;
     private ResourceLocation pendingModelRes;
     private int pendingResFrames;
     private long poseHash;
@@ -77,6 +80,7 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
     private int pooledLight = Integer.MIN_VALUE;
     private int pooledOriginGen;
     private int lastRelightTick = Integer.MIN_VALUE;
+    private float cullRadius;
 
     public KmodoFlywheelVehicleVisual(VisualizationContext ctx, GeoVehicleEntity entity, float partialTick) {
         super(ctx, entity, partialTick);
@@ -338,9 +342,6 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
             }
             return;
         }
-        if (!isVisible(ctx.frustum())) {
-            return;
-        }
         final boolean prof = KmodoProfiler.enabled();
         long totalStart = prof ? System.nanoTime() : 0L;
 
@@ -353,6 +354,10 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         ResourceLocation res = modelRes();
         if (res == null) {
             return;
+        }
+        ResourceLocation tex = textureRes();
+        if (instancesCreated && tex != null && !tex.equals(createdTexture)) {
+            deleteInstances();
         }
         if (instancesCreated && !res.equals(createdModelRes)) {
             if (res.equals(pendingModelRes)) {
@@ -383,6 +388,8 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
             }
             instancesCreated = true;
             createdModelRes = res;
+            createdTexture = tex;
+            cullRadius = computeCullRadius(models);
             if (prof) {
                 KmodoProfiler.addPhase(KmodoProfiler.Phase.BAKE, System.nanoTime() - bakeStart);
             }
@@ -390,6 +397,12 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
             KmodoDebug.onFlywheelInstanceCreated(res, dynamicInstances.size());
         }
         if (bodyInstance == null && dynamicInstances.isEmpty()) {
+            return;
+        }
+        if (hasApplied && !frustumVisible(ctx.frustum(), partialTick)) {
+            if (prof) {
+                KmodoProfiler.addPhase(KmodoProfiler.Phase.TOTAL, System.nanoTime() - totalStart);
+            }
             return;
         }
 
@@ -490,6 +503,43 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         poseHash = poseHash * FNV_PRIME + q;
     }
 
+    @Override
+    public boolean isVisible(FrustumIntersection frustum) {
+        return frustumVisible(frustum, 1.0f);
+    }
+
+    private boolean frustumVisible(FrustumIntersection frustum, float partialTick) {
+        if (cullRadius <= 0.0f) {
+            return true;
+        }
+        Vector3f p = getVisualPosition(partialTick);
+        double dx = entity.getX() - entity.xOld;
+        double dy = entity.getY() - entity.yOld;
+        double dz = entity.getZ() - entity.zOld;
+        float margin = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+        float r = cullRadius * Math.max(scaleW, scaleH) + margin;
+        return frustum.testSphere(p.x(), p.y(), p.z(), r);
+    }
+
+    private static float computeCullRadius(VehicleModels models) {
+        float r = 0.0f;
+        if (models.body != null) {
+            r = sphereExtent(models.body);
+        }
+        for (Model m : models.dynamicBones.values()) {
+            r = Math.max(r, sphereExtent(m));
+        }
+        return r * 1.5f;
+    }
+
+    private static float sphereExtent(Model model) {
+        Vector4fc s = model.boundingSphere();
+        float cx = s.x();
+        float cy = s.y();
+        float cz = s.z();
+        return (float) Math.sqrt(cx * cx + cy * cy + cz * cz) + s.w();
+    }
+
     private Instancer<TransformedInstance> instancer(Model model) {
         return instancerProvider().instancer(InstanceTypes.TRANSFORMED, model);
     }
@@ -506,6 +556,7 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         dynamicInstances.clear();
         instancesCreated = false;
         createdModelRes = null;
+        createdTexture = null;
         hasApplied = false;
         appliedStamp = Long.MIN_VALUE;
     }
@@ -529,6 +580,14 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         try {
             GeoModel model = renderer.getGeoModel();
             return model.getModelResource(entity);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private ResourceLocation textureRes() {
+        try {
+            return ((EntityRenderer) renderer).getTextureLocation(entity);
         } catch (Throwable t) {
             return null;
         }
