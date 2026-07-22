@@ -515,7 +515,7 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
     }
 
     private boolean frustumVisible(FrustumIntersection frustum, float partialTick) {
-        if (cullRadius <= 0.0f) {
+        if (cullRadius <= 0.0f || !KmodoConfig.frustumCullTrusted()) {
             return true;
         }
         Vector3f p = getVisualPosition(partialTick);

@@ -47,6 +47,15 @@ public final class KmodoConfig {
         return !shaderPackActive();
     }
 
+    private static Boolean foreignFrustum;
+
+    public static boolean frustumCullTrusted() {
+        if (foreignFrustum == null) {
+            foreignFrustum = ModList.get().isLoaded("voxy") || ModList.get().isLoaded("boxy");
+        }
+        return !foreignFrustum;
+    }
+
     private static Boolean irisLoaded;
 
     private static boolean shaderPackActive() {
