@@ -25,6 +25,7 @@ import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.Entity;
 
+import com.atsuishio.superbwarfare.client.model.entity.VehicleModel;
 import com.atsuishio.superbwarfare.entity.vehicle.base.GeoVehicleEntity;
 import com.norwood.komodo.Komodo;
 import dev.engine_room.flywheel.api.material.CardinalLightingMode;
@@ -52,6 +53,9 @@ public final class KmodoFlywheelModelCache {
             "wheel", "track", "turret", "barrel", "cannon", "gun", "muzzle", "recoil", "rotor", "prop", "blade",
             "mantlet", "elevation", "traverse", "hatch", "rudder", "elevator", "aileron", "flap", "steer",
             "suspension", "radar", "antenna", "launcher", "missile", "gear", "swivel", "dish");
+
+
+    private static final Set<String> STRUCTURAL_BONES = Set.of("root", "base");
 
     private static final int BAKE_LIGHT = 0;
 
@@ -95,11 +99,37 @@ public final class KmodoFlywheelModelCache {
         return false;
     }
 
-    private static boolean isDynamicFor(String boneName, boolean lodModel) {
-        if (lodModel && boneName != null && boneName.toLowerCase(Locale.ROOT).contains("track")) {
+    private static boolean isDynamicFor(String boneName, boolean lodModel, VehicleModel<?> model) {
+        if (boneName == null) {
             return false;
         }
-        return isDynamic(boneName);
+        if (lodModel && boneName.toLowerCase(Locale.ROOT).contains("track")) {
+            return false;
+        }
+        if (isDynamic(boneName)) {
+            return true;
+        }
+        return isModelDynamic(model, boneName);
+    }
+
+    private static boolean isModelDynamic(VehicleModel<?> model, String boneName) {
+        if (model == null || STRUCTURAL_BONES.contains(boneName)) {
+            return false;
+        }
+        try {
+            return model.collectTransform(boneName) != null;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static VehicleModel<?> vehicleModel(GeoRenderer<?> renderer) {
+        try {
+            GeoModel<?> model = renderer.getGeoModel();
+            return (model instanceof VehicleModel<?> vm) ? vm : null;
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     private static boolean isLodModel(ResourceLocation res) {
@@ -166,10 +196,11 @@ public final class KmodoFlywheelModelCache {
             boolean lodModel = isLodModel(res);
 
             Map<ByteBuffer, Model> meshDedup = new HashMap<>();
+            VehicleModel<?> vehicleModel = vehicleModel(renderer);
             PoseStack pose = new PoseStack();
             for (GeoBone top : baked.topLevelBones()) {
                 bakeWalk(renderer, pose, top, false, body, dynamicBones, material, state.blocks, anyBody,
-                        dynamicBoneVertCounts, lodModel, meshDedup);
+                        dynamicBoneVertCounts, lodModel, meshDedup, vehicleModel);
             }
 
             Model bodyModel = null;
@@ -204,8 +235,8 @@ public final class KmodoFlywheelModelCache {
                                  BufferBuilder body, Map<String, Model> dynamicBones, Material material,
                                  List<MemoryBlock> blocks, boolean[] anyBody,
                                  Map<String, Integer> dynamicBoneVertCounts, boolean lodModel,
-                                 Map<ByteBuffer, Model> meshDedup) {
-        boolean dynamic = dynamicAncestor || isDynamicFor(bone.getName(), lodModel);
+                                 Map<ByteBuffer, Model> meshDedup, VehicleModel<?> vehicleModel) {
+        boolean dynamic = dynamicAncestor || isDynamicFor(bone.getName(), lodModel, vehicleModel);
         boolean drawable = bone.getName() != null && !bone.getName().endsWith("_dogTag")
                 && !bone.isHidden() && !bone.getCubes().isEmpty();
 
@@ -232,7 +263,7 @@ public final class KmodoFlywheelModelCache {
 
         for (GeoBone child : bone.getChildBones()) {
             bakeWalk(renderer, pose, child, dynamic, body, dynamicBones, material, blocks, anyBody,
-                    dynamicBoneVertCounts, lodModel, meshDedup);
+                    dynamicBoneVertCounts, lodModel, meshDedup, vehicleModel);
         }
         pose.popPose();
     }

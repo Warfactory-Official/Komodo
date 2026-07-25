@@ -27,8 +27,10 @@ import org.joml.Vector3f;
 import org.joml.Vector4fc;
 import software.bernie.geckolib.cache.object.BakedGeoModel;
 import software.bernie.geckolib.cache.object.GeoBone;
+import software.bernie.geckolib.constant.DataTickets;
 import software.bernie.geckolib.core.animation.AnimationState;
 import software.bernie.geckolib.model.GeoModel;
+import software.bernie.geckolib.model.data.EntityModelData;
 import software.bernie.geckolib.renderer.GeoRenderer;
 import software.bernie.geckolib.util.RenderUtils;
 
@@ -152,8 +154,10 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         }
 
         long animStart = prof ? System.nanoTime() : 0L;
-        geoModel.handleAnimations(entity, renderer.getInstanceId(entity),
-                new AnimationState<>(entity, 0f, 0f, partialTick, false));
+        AnimationState<GeoVehicleEntity> animState = new AnimationState<>(entity, 0f, 0f, partialTick, false);
+        animState.setData(DataTickets.ENTITY_MODEL_DATA,
+                new EntityModelData(false, false, 0f, -Mth.lerp(partialTick, entity.xRotO, entity.getXRot())));
+        geoModel.handleAnimations(entity, renderer.getInstanceId(entity), animState);
         if (prof) {
             KmodoProfiler.addPhase(KmodoProfiler.Phase.ANIMATE, System.nanoTime() - animStart);
         }
