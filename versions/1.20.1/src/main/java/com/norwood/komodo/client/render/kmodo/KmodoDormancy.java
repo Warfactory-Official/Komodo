@@ -3,9 +3,12 @@ package com.norwood.komodo.client.render.kmodo;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.EntityType;
 
+import com.atsuishio.superbwarfare.entity.vehicle.Type63Entity;
 import com.atsuishio.superbwarfare.entity.vehicle.base.GeoVehicleEntity;
 
 import com.norwood.komodo.config.KomodoConfig;
+
+import java.util.List;
 
 public final class KmodoDormancy {
 
@@ -15,6 +18,9 @@ public final class KmodoDormancy {
 
     private static final double POS_EPS = 1.0e-3;
     private static final float ROT_EPS = 0.05f;
+
+    private static final long CONTENT_FNV_OFFSET = -3750763034362895579L;
+    private static final long CONTENT_FNV_PRIME = 1099511628211L;
 
     private boolean dormant;
     private boolean dormancyBlocked;
@@ -27,6 +33,9 @@ public final class KmodoDormancy {
 
     private boolean probeAllowed;
     private int probePolicyGen = -1;
+
+    private long lastContentSig;
+    private boolean hasContentSig;
 
     public boolean needsUpdate(GeoVehicleEntity e, boolean visualMoved) {
         if (!KmodoConfig.dormancyEnabled()) {
@@ -56,7 +65,10 @@ public final class KmodoDormancy {
         return false;
     }
 
-    public void recordPose(long hash, long tick) {
+    public void recordPose(GeoVehicleEntity e, long hash) {
+        long tick = e.tickCount;
+        lastContentSig = contentSignature(e);
+        hasContentSig = true;
         if (!KmodoConfig.dormancyEnabled()) {
             dormant = false;
             lastHash = hash;
@@ -156,6 +168,45 @@ public final class KmodoDormancy {
         if (e.getCannonRecoilTime() > 0) {
             return true;
         }
-        return e.isOnFire();
+        if (e.isOnFire()) {
+            return true;
+        }
+        // Loadout and turret-target changes drive bones without moving the body or crossing the
+        // per-tick turret delta above, so the base signals miss them. On the Type63 (MLRS), loading /
+        // unloading / firing rockets flips shell-bone visibility via LOADED_AMMO with no rotation at
+        // all, and a winch adjustment lerps the barrel toward TARGET_PITCH/TARGET_YAW at 10%/tick --
+        // whose per-tick delta falls under ROT_EPS while still ~0.5 deg short of target, freezing it
+        // mid-travel. Wake while the loaded ammo differs from the last captured pose, or while the
+        // turret is still settling toward its adjustment target.
+        return contentChanged(e) || turretSettling(e);
+    }
+
+    private boolean contentChanged(GeoVehicleEntity e) {
+        return hasContentSig && contentSignature(e) != lastContentSig;
+    }
+
+    private static boolean turretSettling(GeoVehicleEntity e) {
+        if (e instanceof Type63Entity t63) {
+            return Math.abs(Mth.degreesDifference(
+                            t63.getEntityData().get(Type63Entity.TARGET_YAW), e.getTurretYRot())) > ROT_EPS
+                    || Math.abs(Mth.degreesDifference(
+                            t63.getEntityData().get(Type63Entity.TARGET_PITCH), e.getTurretXRot())) > ROT_EPS;
+        }
+        return false;
+    }
+
+    private static long contentSignature(GeoVehicleEntity e) {
+        if (e instanceof Type63Entity t63) {
+            List<Integer> ammo = t63.getEntityData().get(Type63Entity.LOADED_AMMO);
+            long h = CONTENT_FNV_OFFSET;
+            if (ammo != null) {
+                for (int i = 0; i < ammo.size(); i++) {
+                    Integer v = ammo.get(i);
+                    h = h * CONTENT_FNV_PRIME + (v == null ? 0 : v);
+                }
+            }
+            return h;
+        }
+        return 0L;
     }
 }

@@ -202,7 +202,7 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         boneLocal = local;
         hideBodyFlag = hideBody;
         poseStamp++;
-        dormancy.recordPose(poseHash, entity.tickCount);
+        dormancy.recordPose(entity, poseHash);
         boolean dormant = dormancy.isDormant();
         dormantFlag = dormant;
 
