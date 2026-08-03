@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "com.norwood"
-version = "1.2.2"
+version = "1.2.3"
 
 prism {
     metadata {

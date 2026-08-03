@@ -42,6 +42,12 @@ public final class KmodoAccumulator {
         if (!KmodoConfig.retainEnabled() || !KmodoConfig.rawDrawAllowed()) {
             return false;
         }
+        // GeckoLib's renderCubesOfBone no-ops a hidden bone; don't steal it, so SBW's runtime hide logic
+        // (e.g. the BMP firing-port "window" that hides base/tracks) is honored instead of drawing the
+        // retained mesh anyway. Children are handled by renderChildBones' own isHidingChildren check.
+        if (bone.isHidden()) {
+            return false;
+        }
         VertexBuffer vbo = KmodoMeshCache.getBone(renderer, vehicle, bone.getName());
         if (vbo == null) {
             return false;

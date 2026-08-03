@@ -1,5 +1,6 @@
 package com.norwood.komodo.client.render.kmodo;
 
+import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
@@ -7,6 +8,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -58,13 +60,21 @@ public final class KmodoFlywheelModelCache {
 
     private static final Map<String, ModelState> STATES = new ConcurrentHashMap<>();
     private static final Map<ResourceLocation, Object> LOCKS = new ConcurrentHashMap<>();
+    // Reflective collectTransform lookup, cached per model class (Optional.empty() = no such method). Only
+    // populated during a model bake, which is itself one-time-per-model (STATES cache), so this never runs
+    // on a render frame; the cache just collapses repeat lookups across skins/textures of the same model.
+    private static final Map<Class<?>, Optional<Method>> COLLECT_TRANSFORM_CACHE = new ConcurrentHashMap<>();
 
     public static final class VehicleModels {
         public final Model body;
+        public final Model hull;
+        public final GeoBone hullBone;
         public final Map<String, Model> dynamicBones;
 
-        VehicleModels(Model body, Map<String, Model> dynamicBones) {
+        VehicleModels(Model body, Model hull, GeoBone hullBone, Map<String, Model> dynamicBones) {
             this.body = body;
+            this.hull = hull;
+            this.hullBone = hullBone;
             this.dynamicBones = dynamicBones;
         }
     }
@@ -96,7 +106,7 @@ public final class KmodoFlywheelModelCache {
         return false;
     }
 
-    private static boolean isDynamicFor(String boneName, boolean lodModel, VehicleModel<?> model) {
+    private static boolean isDynamicFor(String boneName, boolean lodModel, TransformProbe probe) {
         if (boneName == null) {
             return false;
         }
@@ -106,27 +116,75 @@ public final class KmodoFlywheelModelCache {
         if (isDynamic(boneName)) {
             return true;
         }
-        return isModelDynamic(model, boneName);
+        return isModelDynamic(probe, boneName);
     }
 
-    private static boolean isModelDynamic(VehicleModel<?> model, String boneName) {
-        if (model == null || STRUCTURAL_BONES.contains(boneName)) {
+    private static boolean isModelDynamic(TransformProbe probe, String boneName) {
+        if (probe == null || STRUCTURAL_BONES.contains(boneName)) {
             return false;
         }
-        try {
-            return model.collectTransform(boneName) != null;
-        } catch (Throwable t) {
-            return false;
-        }
+        return probe.transforms(boneName);
     }
 
-    private static VehicleModel<?> vehicleModel(GeoRenderer<?> renderer) {
+    // Ground truth for "this bone moves each tick" is the model's own collectTransform. Abstracted so it
+    // works for both SBW's VehicleModel and third-party clones (e.g. AshVehicle) that copy the class
+    // instead of extending it.
+    @FunctionalInterface
+    private interface TransformProbe {
+        boolean transforms(String boneName);
+    }
+
+    private static TransformProbe transformProbe(GeoRenderer<?> renderer) {
+        GeoModel<?> model;
         try {
-            GeoModel<?> model = renderer.getGeoModel();
-            return (model instanceof VehicleModel<?> vm) ? vm : null;
+            model = renderer.getGeoModel();
         } catch (Throwable t) {
             return null;
         }
+        if (model == null) {
+            return null;
+        }
+        if (model instanceof VehicleModel<?> vm) {
+            return name -> {
+                try {
+                    return vm.collectTransform(name) != null;
+                } catch (Throwable t) {
+                    return false;
+                }
+            };
+        }
+        // AshVehicle (and similar) ship their OWN VehicleModel<T> that extends GeoModel directly instead of
+        // SBW's VehicleModel, so the instanceof above misses it — every Ash bone would fall back to keyword
+        // matching, freezing collectTransform-driven bones whose names match no pattern (rotors like "VINT",
+        // "Tyre", control surfaces, "bone2", ...). These clones still expose the same public
+        // collectTransform(String); invoke it reflectively so their code-driven bones classify dynamic too.
+        final GeoModel<?> geoModel = model;
+        final Method collect = collectTransformMethod(model.getClass());
+        if (collect == null) {
+            return null;
+        }
+        return name -> {
+            try {
+                return collect.invoke(geoModel, name) != null;
+            } catch (Throwable t) {
+                return false;
+            }
+        };
+    }
+
+    private static Method collectTransformMethod(Class<?> cls) {
+        return COLLECT_TRANSFORM_CACHE.computeIfAbsent(cls, c -> {
+            try {
+                Method m = c.getMethod("collectTransform", String.class);
+                try {
+                    m.setAccessible(true);
+                } catch (Throwable ignored) {
+                }
+                return Optional.of(m);
+            } catch (Throwable t) {
+                return Optional.empty();
+            }
+        }).orElse(null);
     }
 
     private static boolean isLodModel(ResourceLocation res) {
@@ -185,19 +243,23 @@ public final class KmodoFlywheelModelCache {
 
             BufferBuilder body = new BufferBuilder(4096);
             body.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.NEW_ENTITY);
+            BufferBuilder hull = new BufferBuilder(4096);
+            hull.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.NEW_ENTITY);
             Map<String, Model> dynamicBones = new HashMap<>();
 
             Map<String, Integer> dynamicBoneVertCounts = new HashMap<>();
             boolean[] anyBody = {false};
+            boolean[] anyHull = {false};
+            GeoBone[] hullBoneRef = {null};
 
             boolean lodModel = isLodModel(res);
 
             Map<ByteBuffer, Model> meshDedup = new HashMap<>();
-            VehicleModel<?> vehicleModel = vehicleModel(renderer);
+            TransformProbe probe = transformProbe(renderer);
             PoseStack pose = new PoseStack();
             for (GeoBone top : baked.topLevelBones()) {
-                bakeWalk(renderer, pose, top, false, body, dynamicBones, material, state.blocks, anyBody,
-                        dynamicBoneVertCounts, lodModel, meshDedup, vehicleModel);
+                bakeWalk(renderer, pose, top, false, true, false, body, hull, dynamicBones, material, state.blocks,
+                        anyBody, anyHull, hullBoneRef, dynamicBoneVertCounts, lodModel, meshDedup, probe);
             }
 
             Model bodyModel = null;
@@ -209,7 +271,15 @@ public final class KmodoFlywheelModelCache {
                 rendered.release();
             }
 
-            state.models = new VehicleModels(bodyModel, dynamicBones);
+            Model hullModel = null;
+            if (anyHull[0]) {
+                BufferBuilder.RenderedBuffer rendered = hull.end();
+                bodyVertices += rendered.drawState().vertexCount();
+                hullModel = toModel(rendered, material, "hull", state.blocks);
+                rendered.release();
+            }
+
+            state.models = new VehicleModels(bodyModel, hullModel, hullBoneRef[0], dynamicBones);
             state.status = ModelState.READY;
 
             if (KmodoDebug.enabled()) {
@@ -226,11 +296,21 @@ public final class KmodoFlywheelModelCache {
     }
 
     private static void bakeWalk(GeoRenderer<?> renderer, PoseStack pose, GeoBone bone, boolean dynamicAncestor,
-                                 BufferBuilder body, Map<String, Model> dynamicBones, Material material,
-                                 List<MemoryBlock> blocks, boolean[] anyBody,
-                                 Map<String, Integer> dynamicBoneVertCounts, boolean lodModel,
-                                 Map<ByteBuffer, Model> meshDedup, VehicleModel<?> vehicleModel) {
-        boolean dynamic = dynamicAncestor || isDynamicFor(bone.getName(), lodModel, vehicleModel);
+                                 boolean topLevel, boolean underHull, BufferBuilder body, BufferBuilder hull,
+                                 Map<String, Model> dynamicBones, Material material,
+                                 List<MemoryBlock> blocks, boolean[] anyBody, boolean[] anyHull,
+                                 GeoBone[] hullBoneRef, Map<String, Integer> dynamicBoneVertCounts, boolean lodModel,
+                                 Map<ByteBuffer, Model> meshDedup, TransformProbe probe) {
+        boolean dynamic = dynamicAncestor || isDynamicFor(bone.getName(), lodModel, probe);
+        // A non-top-level structural bone (e.g. "base") roots a runtime-hideable static subtree: SBW toggles its
+        // isHidden to simulate a firing-port "window". Its static cubes go to the separate `hull` mesh so they can
+        // be collapsed independently, while sibling top-level statics (e.g. "firePort") stay in `body`. GeckoLib's
+        // setHidden also hides children, so the whole subtree collapses as a unit.
+        boolean hullRoot = !topLevel && bone.getName() != null && STRUCTURAL_BONES.contains(bone.getName());
+        boolean hullPart = underHull || hullRoot;
+        if (hullRoot && hullBoneRef[0] == null) {
+            hullBoneRef[0] = bone;
+        }
         boolean drawable = bone.getName() != null && !bone.getName().endsWith("_dogTag")
                 && !bone.isHidden() && !bone.getCubes().isEmpty();
 
@@ -249,15 +329,18 @@ public final class KmodoFlywheelModelCache {
                 }
             }
         } else if (drawable) {
-
-            renderer.renderCubesOfBone(pose, bone, body, BAKE_LIGHT, OverlayTexture.NO_OVERLAY,
-                    1f, 1f, 1f, 1f);
-            anyBody[0] = true;
+            if (hullPart) {
+                renderer.renderCubesOfBone(pose, bone, hull, BAKE_LIGHT, OverlayTexture.NO_OVERLAY, 1f, 1f, 1f, 1f);
+                anyHull[0] = true;
+            } else {
+                renderer.renderCubesOfBone(pose, bone, body, BAKE_LIGHT, OverlayTexture.NO_OVERLAY, 1f, 1f, 1f, 1f);
+                anyBody[0] = true;
+            }
         }
 
         for (GeoBone child : bone.getChildBones()) {
-            bakeWalk(renderer, pose, child, dynamic, body, dynamicBones, material, blocks, anyBody,
-                    dynamicBoneVertCounts, lodModel, meshDedup, vehicleModel);
+            bakeWalk(renderer, pose, child, dynamic, false, hullPart, body, hull, dynamicBones, material, blocks,
+                    anyBody, anyHull, hullBoneRef, dynamicBoneVertCounts, lodModel, meshDedup, probe);
         }
         pose.popPose();
     }

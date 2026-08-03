@@ -56,6 +56,7 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
     private final Map<String, TransformedInstance> dynamicInstances = new HashMap<>();
     private final KmodoDormancy dormancy = new KmodoDormancy();
     private TransformedInstance bodyInstance;
+    private TransformedInstance hullInstance;
     private boolean instancesCreated;
     private ResourceLocation createdModelRes;
     private ResourceLocation createdTexture;
@@ -67,6 +68,7 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
     private volatile Map<String, Matrix4f> boneLocal;
     private volatile boolean dormantFlag;
     private volatile boolean hideBodyFlag;
+    private volatile boolean hullHiddenFlag;
     private volatile long poseStamp;
     private volatile float scaleW = 1.0f;
     private volatile float scaleH = 1.0f;
@@ -76,6 +78,7 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
     private float appliedZ;
     private boolean hasApplied;
     private boolean appliedHideBody;
+    private boolean appliedHullHidden;
     private volatile boolean pooled;
     private ResourceLocation pooledRes;
     private int pooledSlotVerts;
@@ -107,6 +110,17 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         return anyLive;
     }
 
+    // A bone's cubes render iff neither it nor any ancestor is hidden: GeckoLib's setHidden(true) also sets
+    // childrenHidden, so a hidden ancestor suppresses the whole subtree.
+    private static boolean effHidden(GeoBone bone) {
+        for (GeoBone b = bone; b != null; b = b.getParent()) {
+            if (b.isHidden()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public void renderThreadUpdate(float partialTick) {
         if (renderer == null || !KmodoConfig.flywheelEnabled() || !BackendManager.isBackendOn()) {
             return;
@@ -126,7 +140,13 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         }
 
         long dormStart = prof ? System.nanoTime() : 0L;
-        boolean needsUpdate = dormancy.needsUpdate(entity, false);
+        // An LOD switch changes the dynamic-bone SET (e.g. "track" is baked static in _lod models but a
+        // dynamic instance in the full model). A vehicle that went dormant at LOD range keeps a frozen
+        // boneLocal with no track matrices; when the player approaches and beginFrame recreates the full
+        // instances, those track instances would COLLAPSE (no matrix) and never render. Treat a res change
+        // since the last walk as a visual change so the pose is rebuilt for the new model before recreation.
+        boolean resChanged = liveRes != null && !res.equals(liveRes);
+        boolean needsUpdate = dormancy.needsUpdate(entity, resChanged);
         if (prof) {
             KmodoProfiler.addPhase(KmodoProfiler.Phase.DORMANCY, System.nanoTime() - dormStart);
             KmodoProfiler.countState(dormancy.state());
@@ -199,8 +219,14 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
             KmodoProfiler.addPhase(KmodoProfiler.Phase.WALK, System.nanoTime() - walkStart);
         }
 
+        GeoBone hullBone = models.hullBone;
+        boolean hullHidden = hullBone != null && effHidden(hullBone);
+        foldFloat(hideBody ? 1.0f : 0.0f);
+        foldFloat(hullHidden ? 1.0f : 0.0f);
+
         boneLocal = local;
         hideBodyFlag = hideBody;
+        hullHiddenFlag = hullHidden;
         poseStamp++;
         dormancy.recordPose(entity, poseHash);
         boolean dormant = dormancy.isDormant();
@@ -393,6 +419,9 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
             if (models.body != null) {
                 bodyInstance = instancer(models.body).createInstance();
             }
+            if (models.hull != null) {
+                hullInstance = instancer(models.hull).createInstance();
+            }
             for (Map.Entry<String, Model> e : models.dynamicBones.entrySet()) {
                 dynamicInstances.put(e.getKey(), instancer(e.getValue()).createInstance());
             }
@@ -406,7 +435,7 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
 
             KmodoDebug.onFlywheelInstanceCreated(res, dynamicInstances.size());
         }
-        if (bodyInstance == null && dynamicInstances.isEmpty()) {
+        if (bodyInstance == null && hullInstance == null && dynamicInstances.isEmpty()) {
             return;
         }
         if (hasApplied && !frustumVisible(ctx.frustum(), partialTick)) {
@@ -424,7 +453,8 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         Vector3f visualPos = getVisualPosition(partialTick);
         long stamp = poseStamp;
         boolean hideBody = hideBodyFlag;
-        if (hasApplied && stamp == appliedStamp && hideBody == appliedHideBody
+        boolean hullHidden = hullHiddenFlag;
+        if (hasApplied && stamp == appliedStamp && hideBody == appliedHideBody && hullHidden == appliedHullHidden
                 && Math.abs(visualPos.x() - appliedX) < APPLY_POS_EPS
                 && Math.abs(visualPos.y() - appliedY) < APPLY_POS_EPS
                 && Math.abs(visualPos.z() - appliedZ) < APPLY_POS_EPS) {
@@ -452,6 +482,13 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
                 KmodoProfiler.countInstances(1);
             }
         }
+        if (hullInstance != null) {
+            hullInstance.setTransform(hullHidden ? COLLAPSE : root);
+            hullInstance.setChanged();
+            if (prof) {
+                KmodoProfiler.countInstances(1);
+            }
+        }
         if (!dynamicInstances.isEmpty()) {
             for (Map.Entry<String, TransformedInstance> e : dynamicInstances.entrySet()) {
                 Matrix4f lm = local == null ? null : local.get(e.getKey());
@@ -468,6 +505,9 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         if (bodyInstance != null) {
             lit.add(bodyInstance);
         }
+        if (hullInstance != null) {
+            lit.add(hullInstance);
+        }
         long relightStart = prof ? System.nanoTime() : 0L;
         relight(partialTick, lit.toArray(new FlatLit[0]));
         if (prof) {
@@ -479,6 +519,7 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         appliedY = visualPos.y();
         appliedZ = visualPos.z();
         appliedHideBody = hideBody;
+        appliedHullHidden = hullHidden;
         hasApplied = true;
 
         if (KmodoDebug.enabled()) {
@@ -536,6 +577,9 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         if (models.body != null) {
             r = sphereExtent(models.body);
         }
+        if (models.hull != null) {
+            r = Math.max(r, sphereExtent(models.hull));
+        }
         for (Model m : models.dynamicBones.values()) {
             r = Math.max(r, sphereExtent(m));
         }
@@ -562,6 +606,10 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
             bodyInstance.delete();
             bodyInstance = null;
         }
+        if (hullInstance != null) {
+            hullInstance.delete();
+            hullInstance = null;
+        }
         dynamicInstances.values().forEach(TransformedInstance::delete);
         dynamicInstances.clear();
         instancesCreated = false;
@@ -581,6 +629,10 @@ public class KmodoFlywheelVehicleVisual extends AbstractEntityVisual<GeoVehicleE
         if (bodyInstance != null) {
             bodyInstance.delete();
             bodyInstance = null;
+        }
+        if (hullInstance != null) {
+            hullInstance.delete();
+            hullInstance = null;
         }
         dynamicInstances.values().forEach(TransformedInstance::delete);
         dynamicInstances.clear();
